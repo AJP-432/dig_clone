@@ -22,12 +22,10 @@
 // Imports:
 use chrono;
 use clap::{Arg, Command};
-use dns_lookup::{
-    lookup_addr, lookup_host, lookup_mx, lookup_ns, lookup_soa, lookup_srv, lookup_txt,
-};
-use std::net::{IpAddr, ToSocketAddrs, UdpSocket};
-use std::str::FromStr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::time::Instant;
+use trust_dns_resolver::Resolver;
+use trust_dns_resolver::config::{NameServerConfig, Protocol, ResolverConfig, ResolverOpts};
 
 const RDIG_VERSION: &str = "1.0";
 
@@ -40,18 +38,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .help("The hostname to query (e.g., google.com)")
                 .required(true) // A mandatory argument
                 .index(1),
-        ) // As the first agument
+        ) // As the first argument
         .get_matches();
 
     let hostname = matches
         .get_one::<String>("hostname")
         .ok_or("Hostname argument is missing; see usage")?;
 
-    let cloudflare_dns_ip = IpAddr::from_str("1.1.1.1")?;
+    // Configure Cloudflare DNS
+    let cloudflare_dns_ip = IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1));
     let cloudflare_dns_port = 53;
-    let dns_server_addr = (cloudflare_dns_ip, cloudflare_dns_port);
 
-    // Simplified Dig-esc output
+    let nameserver = NameServerConfig {
+        socket_addr: (cloudflare_dns_ip, cloudflare_dns_port).into(),
+        protocol: Protocol::Udp,
+        tls_dns_name: None,
+        trust_negative_responses: false,
+        tls_config: None,
+        bind_addr: None,
+    };
+
+    let mut config = ResolverConfig::new();
+    config.add_name_server(nameserver);
+
+    let resolver = Resolver::new(config, ResolverOpts::default())?;
+
+    // Simplified Dig-like output
     println!("; <<>> rdig {} <<>> {}", RDIG_VERSION, hostname);
     println!(
         "; Querying DNS server: {}:{}",
@@ -63,13 +75,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let start_time = Instant::now();
 
-    let ips: Vec<IpAddr> = match lookup_host(hostname, &dns_server_addr) {
-        Ok(ip_addrs) => {
-            if ip_addrs.is_empty() {
-                println!("; No IP addresses found for {}", hostname);
-            }
-            ip_addrs
-        }
+    let response = match resolver.lookup_ip(hostname) {
+        Ok(lookup) => lookup,
         Err(e) => {
             eprintln!(";; Lookup failed for {}: {}", hostname, e);
             // Exit gracefully without panic
@@ -81,18 +88,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let duration = end_time.duration_since(start_time);
     let query_time_ms = duration.as_millis();
 
-    // Print results
-    for ip in ips {
-        println!("{}.        300     IN      A       {}", hostname, ip);
+    let ips: Vec<IpAddr> = response.iter().collect();
+
+    if ips.is_empty() {
+        println!("; No IP addresses found for {}", hostname);
+    } else {
+        // Print results
+        for ip in ips {
+            println!("{}.        300     IN      A       {}", hostname, ip);
+        }
     }
 
     // Command time summary
     println!("\n;; Query time: {} msec", query_time_ms);
-    println!(";; SERVER: {}#{}", cloudflare_dns_ip, CLOUDFLARE_DNS_PORT);
+    println!(";; SERVER: {}#{}", cloudflare_dns_ip, cloudflare_dns_port);
     println!(
         ";; WHEN: {}",
         chrono::Local::now().format("%a %b %d %H:%M:%S %Y")
     );
 
-    Ok(());
+    Ok(())
 }
