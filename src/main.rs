@@ -27,7 +27,7 @@ use std::time::Instant;
 use trust_dns_resolver::Resolver;
 use trust_dns_resolver::config::{NameServerConfig, Protocol, ResolverConfig, ResolverOpts};
 
-const RDIG_VERSION: &str = "1.0";
+const RDIG_VERSION: &str = "1.0.0";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("rdig")
